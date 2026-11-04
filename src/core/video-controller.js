@@ -51,6 +51,7 @@ class VideoController {
 
     // Set up event handlers
     this.setupEventHandlers();
+    this.actionHandler?.notifyBadgeState?.(this.video);
 
     // Set up mutation observer for src changes
     this.setupMutationObserver();
@@ -240,7 +241,11 @@ class VideoController {
 
     // Bind event handlers. Seek evidence is recorded before the readyState
     // restore guard so initialization-time seeks can explain a 1.0 reset.
-    this.handlePlay = mediaEventAction.bind(this);
+    this.handlePlay = (event) => {
+      mediaEventAction.call(this, event);
+      this.actionHandler?.notifyBadgeState?.(this.video);
+    };
+    this.handlePause = () => this.actionHandler?.notifyBadgeState?.(this.video);
     this.handleSeekEvidence = (event) => {
       this.arbitration.classifier?.observeSeek(this.video, event.timeStamp);
     };
@@ -261,6 +266,8 @@ class VideoController {
     // `loadstart` marks a resource boundary on a reused element; ordinary MSE
     // representation switches need not emit it.
     this.video.addEventListener('play', this.handlePlay);
+    this.video.addEventListener('pause', this.handlePause);
+    this.video.addEventListener('ended', this.handlePause);
     this.video.addEventListener('seeking', this.handleSeekEvidence);
     this.video.addEventListener('seeked', this.handleSeek);
     this.video.addEventListener('loadstart', this.handleMediaInit);
@@ -300,6 +307,7 @@ class VideoController {
    */
   remove() {
     window.VSC.logger.debug('Removing VideoController');
+    this.actionHandler?.notifyBadgeState?.(this.video, false, true);
 
     // A detached controller must not be retained or mutated by a pending
     // visibility flash callback after its media/controller lifecycle ends.
@@ -317,6 +325,11 @@ class VideoController {
     if (this.handlePlay) {
       this.video.removeEventListener('play', this.handlePlay);
       this.handlePlay = null;
+    }
+    if (this.handlePause) {
+      this.video.removeEventListener('pause', this.handlePause);
+      this.video.removeEventListener('ended', this.handlePause);
+      this.handlePause = null;
     }
     if (this.handleSeek) {
       this.video.removeEventListener('seeked', this.handleSeek);

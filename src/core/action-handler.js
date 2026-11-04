@@ -518,6 +518,7 @@ class ActionHandler {
     }
     this.writeRate(video, targetSpeed);
     this.syncIndicator(video, targetSpeed);
+    this.notifyBadgeState(video, true);
   }
 
   /**
@@ -557,6 +558,7 @@ class ActionHandler {
       });
     }
     window.VSC.siteHandlerManager.handleSpeedChange(video, numericSpeed);
+    this.notifyBadgeState(video);
   }
 
   /**
@@ -580,6 +582,27 @@ class ActionHandler {
     if (video.vsc?.div) {
       this.flashController(video.vsc.div);
     }
+    this.notifyBadgeState(video);
+  }
+
+  /** Relay one media element's state to the isolated extension bridge. */
+  notifyBadgeState(video, interacted = false, removed = false) {
+    const controllerId = video?.vsc?.controllerId;
+    if (!controllerId) {
+      return;
+    }
+    document.documentElement.dispatchEvent(
+      new CustomEvent('VSC_BADGE_STATE', {
+        detail: {
+          type: 'MEDIA_STATE',
+          controllerId,
+          speed: video.playbackRate,
+          playing: !video.paused && !video.ended,
+          interacted,
+          removed,
+        },
+      })
+    );
   }
 }
 

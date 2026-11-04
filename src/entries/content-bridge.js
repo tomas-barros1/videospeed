@@ -33,6 +33,14 @@ function init() {
     }
     bridgeInitialized = true;
 
+    window.addEventListener(
+      'pagehide',
+      () => {
+        chrome.runtime.sendMessage({ type: 'FRAME_RESET' }).catch(() => {});
+      },
+      { once: true }
+    );
+
     // Inherited about: documents have no trustworthy site URL available
     // without crossing into page context. Fail closed instead: supporting media
     // in these rare frames is less important than honoring disabled-site rules.
@@ -145,6 +153,13 @@ function init() {
       }
     };
     docEl.addEventListener('VSC_WRITE_STORAGE', handleWriteStorage);
+
+    docEl.addEventListener('VSC_BADGE_STATE', (event) => {
+      if (!bridgeActive || !event.detail || typeof event.detail !== 'object') {
+        return;
+      }
+      chrome.runtime.sendMessage(event.detail);
+    });
   } catch (error) {
     console.error('[VSC] Bridge init failed:', error);
   }

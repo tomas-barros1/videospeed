@@ -83,6 +83,142 @@ import {
   DEFAULT_BINDINGS,
 } from './utils/key-maps.js';
 
+// Keep media state per tab and frame; MV3 may suspend this worker between events.
+const mediaByTab = new Map();
+const badgeUpdates = new Map();
+const mediaStateReady = chrome.storage.local
+  .get({ badgeMediaByTab: {} })
+  .then(({ badgeMediaByTab }) => {
+    for (const [tabId, entries] of Object.entries(badgeMediaByTab)) {
+      mediaByTab.set(Number(tabId), new Map(entries));
+    }
+  });
+let mediaStateWrite = Promise.resolve();
+
+function persistMediaState() {
+  const badgeMediaByTab = Object.fromEntries(
+    [...mediaByTab].map(([tabId, media]) => [tabId, [...media]])
+  );
+  mediaStateWrite = mediaStateWrite.then(() => chrome.storage.local.set({ badgeMediaByTab }));
+  return mediaStateWrite;
+}
+
+function getTabMedia(tabId) {
+  if (!mediaByTab.has(tabId)) {
+    mediaByTab.set(tabId, new Map());
+  }
+  return mediaByTab.get(tabId);
+}
+
+function refreshSpeedBadge(tabId) {
+  const previousUpdate = badgeUpdates.get(tabId) || Promise.resolve();
+  const update = previousUpdate
+    .catch(() => {})
+    .then(async () => {
+      try {
+        const media = mediaByTab.get(tabId);
+        const candidates = media ? [...media.values()] : [];
+        candidates.sort(
+          (a, b) =>
+            Number(b.playing) - Number(a.playing) ||
+            b.interactedAt - a.interactedAt ||
+            b.updatedAt - a.updatedAt
+        );
+        const selected = candidates[0];
+        const text =
+          selected && selected.speed !== 1
+            ? selected.speed % 1 === 0
+              ? selected.speed.toFixed(0)
+              : selected.speed.toFixed(1)
+            : '';
+        await chrome.action.setBadgeText({ text, tabId });
+        await chrome.action.setBadgeBackgroundColor({ color: '#43464c', tabId });
+      } catch (error) {
+        console.error('Failed to update speed badge:', error);
+      }
+    });
+  badgeUpdates.set(tabId, update);
+  return update;
+}
+
+function clearTabMedia(tabId) {
+  mediaByTab.delete(tabId);
+  refreshSpeedBadge(tabId);
+}
+
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (!sender.tab || !Number.isInteger(sender.tab.id)) {
+    return;
+  }
+  mediaStateReady
+    .then(() => {
+      const tabId = sender.tab.id;
+      const frameId = Number.isInteger(sender.frameId) ? sender.frameId : 0;
+      const media = mediaByTab.get(tabId);
+
+      if (message.type === 'FRAME_RESET') {
+        if (media) {
+          for (const key of media.keys()) {
+            if (key.startsWith(`${frameId}:`)) {
+              media.delete(key);
+            }
+          }
+        }
+        if (!media?.size) {
+          mediaByTab.delete(tabId);
+        }
+      } else if (
+        message.type === 'MEDIA_STATE' &&
+        typeof message.controllerId === 'string' &&
+        Number.isFinite(message.speed)
+      ) {
+        const tabMedia = getTabMedia(tabId);
+        const key = `${frameId}:${message.controllerId}`;
+        const previous = tabMedia.get(key);
+        const now = Date.now();
+        if (message.removed) {
+          tabMedia.delete(key);
+        } else {
+          tabMedia.set(key, {
+            speed: message.speed,
+            playing: message.playing === true,
+            interactedAt: message.interacted === true ? now : previous?.interactedAt || 0,
+            updatedAt: now,
+          });
+        }
+        if (!tabMedia.size) {
+          mediaByTab.delete(tabId);
+        }
+      } else {
+        return;
+      }
+
+      refreshSpeedBadge(tabId);
+      return persistMediaState();
+    })
+    .catch((error) => console.error('Failed to update badge media state:', error));
+});
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  mediaStateReady.then(() => refreshSpeedBadge(tabId));
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') {
+    mediaStateReady.then(() => {
+      clearTabMedia(tabId);
+      return persistMediaState();
+    });
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  mediaStateReady.then(() => {
+    clearTabMedia(tabId);
+    return persistMediaState();
+  });
+});
+
 /**
  * Migrate key bindings from v1 (keyCode integers) to v2 (event.code strings).
  *
